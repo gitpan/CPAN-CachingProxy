@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:                CPAN-CachingProxy
-version:             1.000000
+version:             1.0.1
 abstract:            ~
 license:             ~
 author:              ~
@@ -9,8 +9,9 @@ distribution_type:   module
 requires:     
     Cache::File:                   0
     Data::Dumper:                  0
-    LWP:                           
+    LWP:                           0
     Software::License::LGPL_2_1:   0
+    version:                       0
 meta-spec:
     url:     http://module-build.sourceforge.net/META-spec-v1.3.html
     version: 1.3
