@@ -1,0 +1,17 @@
+1.0.2: Tue May 27 10:17:15 EDT 2008
+   - minor doc changes
+   - minor updates to the backend URL construction
+   - made the DEBUG messages optoinal and not default
+   - fixed a very minor bug in the mirror urlification
+   - (wow, use version has to be on the same line as our $VERSION
+      for older EUMM)
+
+1.0.1: Mon May 26 15:32:02 EDT 2008
+   - I might as well do a new version of everything using
+     version.pm while I wait for all my CPAN deletes to go
+     through.  I just discovered that version.pm doesn't/didn't
+     go core until perl 5.9...  I really wish I'd have prereqed
+     it everywhere I used it, but I didn't.  *sigh*
+
+1.0.0: Sat May 24 09:31:16 EDT 2008
+   - using version.pm as suggested by Andreas Koenig

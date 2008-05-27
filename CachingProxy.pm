@@ -10,8 +10,7 @@ use Cache::File;
 use Data::Dumper;
 use LWP::UserAgent;
 
-use version;
-our $VERSION = qv('1.0.1');
+use version; our $VERSION = qv('1.0.2');
 
 # wget -O MIRRORED.BY http://www.cpan.org/MIRRORED.BY
 
@@ -36,7 +35,7 @@ sub new {
 
     unless( $this->{ua} ) {
         my $ua = $this->{ua} = new LWP::UserAgent;
-           $ua->agent($this->{agent} ? $this->{agent} : "CCP/$VERSION (paul's CPAN caching proxy / perlmonks-id=16186)");
+           $ua->agent($this->{agent} ? $this->{agent} : "CCP/$VERSION (Paul's CPAN caching proxy / perlmonks-id=16186)");
     }
 
     croak "there are no default mirrors, they must be set" unless $this->{mirrors};
@@ -62,7 +61,7 @@ sub run {
 
         my $status = $res->status_line;
 
-        warn "[DEBUG] status: $status";
+        warn "[DEBUG] status: $status" if $this->{debug};
         print $cgi->header(-status=>$status, -type=>$res->header( 'content-type' ));
 
         my $fh  = $cache->handle( $CK, "<" ) or die "problem finding cache entry\n";
@@ -80,7 +79,7 @@ sub run {
         close $fh;
 
         unless( $res->is_success ) {
-            warn "[DEBUG] removing $CK";
+            warn "[DEBUG] removing $CK" if $this->{debug};
             $cache->remove($CK);
         }
 
@@ -94,14 +93,17 @@ sub run {
 
         $cache->set($CK, 1); # doesn't seem like we should ahve to do this, but apparently we do
 
-        warn "[DEBUG] getting $mirror/$pinfo";
+        my $URL = "$mirror/$pinfo";
+         # $URL =~ s/\/{2,}/\//g;
+
+        warn "[DEBUG] getting $URL" if $this->{debug};
 
         my $fh = $cache->handle( $CK, ">" );
-        my $request  = HTTP::Request->new(GET => "$mirror/$pinfo");
+        my $request  = HTTP::Request->new(GET => $URL);
         my $response = $ua->request($request, sub { my $chunk = shift; print $fh $chunk });
         close $fh;
 
-        warn "[DEBUG] setting $CK";
+        warn "[DEBUG] setting $CK" if $this->{debug};
         $cache->set("$CK.hdr", Dumper($response));
 
         goto THE_TOP;
