@@ -1,17 +1,25 @@
 --- #YAML:1.0
-name:                CPAN-CachingProxy
-version:             1.3
-abstract:            ~
-license:             ~
-author:              ~
-generated_by:        ExtUtils::MakeMaker version 6.44
-distribution_type:   module
-requires:     
-    Cache::File:                   0
-    Data::Dumper:                  0
-    LWP:                           0
-    Software::License::LGPL_2_1:   0
-    version:                       0
+name:               CPAN-CachingProxy
+version:            1.4
+abstract:           ~
+author:  []
+license:            unknown
+distribution_type:  module
+configure_requires:
+    ExtUtils::MakeMaker:  0
+build_requires:
+    ExtUtils::MakeMaker:  0
+requires:
+    Cache::File:          0
+    Data::Dumper:         0
+    LWP:                  0
+    Software::License::LGPL_2_1:  0
+    version:              0
+no_index:
+    directory:
+        - t
+        - inc
+generated_by:       ExtUtils::MakeMaker version 6.50
 meta-spec:
-    url:     http://module-build.sourceforge.net/META-spec-v1.3.html
-    version: 1.3
+    url:      http://module-build.sourceforge.net/META-spec-v1.4.html
+    version:  1.4
