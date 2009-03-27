@@ -1,20 +1,22 @@
 --- #YAML:1.0
 name:               CPAN-CachingProxy
-version:            1.4
+version:            1.4001
 abstract:           ~
 author:  []
-license:            unknown
+license:            lgpl2
 distribution_type:  module
 configure_requires:
     ExtUtils::MakeMaker:  0
 build_requires:
     ExtUtils::MakeMaker:  0
 requires:
-    Cache::File:          0
-    Data::Dumper:         0
-    LWP:                  0
-    Software::License::LGPL_2_1:  0
-    version:              0
+    Cache::File:   0
+    Data::Dumper:  0
+    LWP:           0
+    perl:          5.008
+    version:       0
+resources:
+    repository:  http://github.com/jettero/cpan--cachingproxy/tree
 no_index:
     directory:
         - t
@@ -23,3 +25,6 @@ generated_by:       ExtUtils::MakeMaker version 6.50
 meta-spec:
     url:      http://module-build.sourceforge.net/META-spec-v1.4.html
     version:  1.4
+keywords:
+    - CPAN
+    - cache
