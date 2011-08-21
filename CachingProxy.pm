@@ -4,11 +4,12 @@ package CPAN::CachingProxy;
 
 use strict;
 use Carp;
+use URI;
 use Cache::File;
 use Data::Dumper;
 use LWP::UserAgent;
 
-our $VERSION = 1.4002;
+our $VERSION = "1.5000";
 
 # wget -O MIRRORED.BY http://www.cpan.org/MIRRORED.BY
 
@@ -32,7 +33,7 @@ sub new {
         $this->{cache_object}   = Cache::File->new(cache_root=>$this->{cache_root}, default_expires => $this->{default_expire} );
     }
 
-    $this->{key_space}        = "CK" unless $this->{key_space};
+    $this->{key_space} = "CK" unless $this->{key_space};
 
     unless( $this->{ua} ) {
         my $ua = $this->{ua} = new LWP::UserAgent;
@@ -59,61 +60,90 @@ sub run {
     my $this   = shift;
     my $cgi    = $this->{cgi};
     my $mirror = $this->{mirrors}[ rand @{$this->{mirrors}} ];
-    my $pinfo  = $cgi->path_info;
+    my $pinfo  = $cgi->path_info || return print $cgi->redirect( $cgi->url . "/" );
+
        $pinfo =~ s/^\///;
        $mirror=~ s/\/$//;
 
-    my $CK    = "$this->{key_space}:$pinfo";
-    my $again = 0;
+    my $CK = "$this->{key_space}:$pinfo";
+    my $URL = "$mirror/$pinfo";
+     # $URL =~ s/\/{2,}/\//g;
 
-    THE_TOP:
+    if( $pinfo =~ s{^___/}{} ) {
+        # NOTE: undocumented special case.  If the path begins with ___, it
+        # probably came from a 404 handler.  in which case, the real pinfo was
+        # probably an absolute url.  replace the entire path portion of our
+        # mirror url with the non ___'d part of the pinfo.
+
+        my $nurl = URI->new($mirror);
+        $nurl->path($pinfo);
+        # arguably we should use URI for all our path manips, but this section is new and the old stuff works fine
+        $URL = "$nurl";
+    }
+
     my $cache = $this->{cache_object};
     if( $cache->exists($CK) and $cache->exists("$CK.hdr") ) { our $VAR1;
         my $res = eval $cache->get( "$CK.hdr" ); die "problem finding cache entry\n" if $@;
 
-        my $status = $res->status_line;
+        unless( $this->{ignore_last_modified} ) {
+            if( my $lm = $res->header('last_modified') ) {
+                my $_lm = eval { $this->{ua}->head($URL)->header('last_modified') };
 
-        warn "[DEBUG] status: $status" if $this->{debug};
-        print $cgi->header(-status=>$status, -type=>$res->header( 'content-type' ));
+                # $lm = "hehe, random failure time" if (int rand(7)) == 0;
 
-        if( $res->is_success ) {
-            my $fh = $cache->handle( $CK, "<" ) or die "problem finding cache entry\n";
-            my $buf;
-            while( read $fh, $buf, 4096 ) {
-                print $buf;
+                if( $_lm and $lm ne $_lm ) {
+                    warn "[DEBUG] last_modified differs ($lm vs $_lm), forcing cache miss\n" if $this->{debug};
+                    goto FORCE_CACHE_MISS;
+                }
             }
-            close $fh;
-
-        } else {
-            print $status;
         }
 
-        unless( $res->is_success ) {
-            warn "[DEBUG] removing $CK" if $this->{debug};
-            $cache->remove($CK);
+        $this->my_copy_hdr($res, "cache hit");
+
+        my $fh = $cache->handle( $CK, "<" ) or die "problem finding cache entry\n";
+        my $buf;
+        while( read $fh, $buf, 4096 ) {
+            print $buf;
         }
+        close $fh;
 
-        return;
-
-    } elsif( not $again ) {
-        $again = 1;
-
+    } else {
+        FORCE_CACHE_MISS:
         my $expire = $this->{default_expire};
            $expire = $this->{index_expire} if $pinfo =~ $this->{index_regexp};
 
         $cache->set($CK, 1, $expire ); # doesn't seem like we should have to do this, but apparently we do
 
-        my $URL = "$mirror/$pinfo";
-         # $URL =~ s/\/{2,}/\//g;
+        warn "[DEBUG] getting $URL\n" if $this->{debug};
 
-        warn "[DEBUG] getting $URL" if $this->{debug};
-
-        my $fh = $cache->handle( $CK, ">", $expire );
+        my $fh       = $cache->handle( $CK, ">", $expire );
         my $request  = HTTP::Request->new(GET => $URL);
-        my $response = $this->{ua}->request($request, sub { my $chunk = shift; print $fh $chunk });
+
+        my $announced_header;
+        my $response = $this->{ua}->request($request, sub {
+            my $chunk = shift;
+
+            unless( $announced_header ) {
+                my $res = shift;
+                $announced_header = 1;
+                $this->my_copy_hdr($res, "cache miss");
+            }
+
+            print $fh $chunk;
+            print     $chunk;
+        });
         close $fh;
 
-        warn "[DEBUG] setting $CK" if $this->{debug};
+        unless( $response->is_success ) {
+            my $my_fail = "FAIL: " . $response->status_line . "\n";
+            $cache->set($CK => $my_fail, $expire);
+            $response->header(content_length=>length $my_fail); # fix content length so we don't lie to clients
+
+            $this->my_copy_hdr($response, "cache miss [fail]");
+            print $my_fail;
+        }
+
+        warn "[DEBUG] setting $CK\n" if $this->{debug};
         $cache->set("$CK.hdr", Dumper($response), $expire);
 
         # if there was an error (which we don't know until ex post facto), go back and fix the expiry
@@ -121,10 +151,26 @@ sub run {
             $cache->set_expiry( $CK       => $this->{error_expire} );
             $cache->set_expiry( "$CK.hdr" => $this->{error_expire} );
         }
+    }
+}
+# }}}
 
-        goto THE_TOP;
+# {{{ sub my_copy_hdr
+sub my_copy_hdr {
+    my ($this, $res, $hit) = @_;
+    my $cgi = $this->{cgi};
+
+    my $status = $res->status_line;
+    warn "[DEBUG] cache status: $hit; status: $status\n" if $this->{debug};
+
+    my @more_headers = (qw(accept_ranges bytes));
+
+    for(qw(content_length), $this->{ignore_last_modified} ? ():(qw(last_modified))) {
+        my $v = $res->header($_);
+        push @more_headers, ($_=>$v) if $v;
     }
 
-    die "problem fetching $pinfo. :(\n";
+    print $cgi->header(-status=>$status, -charset=>"", -type=>$res->header( 'content-type' ), @more_headers);
 }
+
 # }}}
