@@ -8,8 +8,10 @@ use URI;
 use Cache::File;
 use Data::Dumper;
 use LWP::UserAgent;
+use Fcntl qw(:flock);
+use Digest::SHA1 qw(sha1_hex);
 
-our $VERSION = "1.5000";
+our $VERSION = "1.6500";
 
 # wget -O MIRRORED.BY http://www.cpan.org/MIRRORED.BY
 
@@ -24,10 +26,12 @@ sub new {
     }
 
     unless( $this->{cache_object} ) {
-        $this->{cache_root}      = "/tmp/ccp/" unless exists $this->{cache_root};
-        $this->{default_expire} = "2 day"      unless exists $this->{default_expire};
-        $this->{index_expire}   = "3 hour"     unless exists $this->{index_expire};
-        $this->{error_expire}   = "15 minute"  unless exists $this->{error_expire};
+        $this->{cache_root}       = "/tmp/ccp/"  unless exists $this->{cache_root};
+        $this->{cache_root}       = "/tmp/ccp/"  unless exists $this->{cache_root};
+        $this->{default_expire}   = "2 day"      unless exists $this->{default_expire};
+        $this->{index_expire}     = "3 hour"     unless exists $this->{index_expire};
+        $this->{error_expire}     = "15 minute"  unless exists $this->{error_expire};
+        $this->{url_lockfile_dir} = "/tmp"       unless exists $this->{url_lockfile_dir};
 
         $this->{index_regexp}   = qr/(?:03modlist\.data|02packages\.details\.txt|01mailrc\.txt)/ unless exists $this->{index_regexp};
         $this->{cache_object}   = Cache::File->new(cache_root=>$this->{cache_root}, default_expires => $this->{default_expire} );
@@ -81,6 +85,32 @@ sub run {
         $URL = "$nurl";
     }
 
+    my $lockfile_fh;
+    my $uld = $this->{url_lockfile_dir};
+    if( $uld and -d $uld ) {
+        for(glob("$uld/.CP_FILE*")) {
+            open my $tlf, "<", $_ or next;
+            next unless flock $tlf, (LOCK_NB|LOCK_EX);
+            warn "[DEBUG] unlinking old URL-lockfile $_\n" if $this->{debug};
+            unlink $_;
+        }
+
+        # NOTE: sha1 is not for security, as I think timing attacks on this
+        # have little value really, aside from DoS, and then the local
+        # attackers probably have better things to do.  These are simply here
+        # because my /tmp is tmpfs, which has surprisingly low file name length
+        # restrictions.
+        my $converted = join("/", $uld, ".CP_FILE_" . sha1_hex($URL));
+
+        warn "[DEBUG] locking $URL using $converted lockfile\n" if $this->{debug};
+        open $lockfile_fh, ">", $converted or die "error opening lockfile for $URL: $!";
+        flock $lockfile_fh, LOCK_EX or die "failed to lock lockfile for $URL: $!";
+    }
+
+    else {
+        die "as of version 1.6, url_locking_dir is a required option.";
+    }
+
     my $cache = $this->{cache_object};
     if( $cache->exists($CK) and $cache->exists("$CK.hdr") ) { our $VAR1;
         my $res = eval $cache->get( "$CK.hdr" ); die "problem finding cache entry\n" if $@;
@@ -98,11 +128,29 @@ sub run {
             }
         }
 
-        $this->my_copy_hdr($res, "cache hit");
+        my $start = $this->my_copy_hdr($res, "cache hit");
+
+        # XXX: is it the right thing to do to close the lockfile here?
+        # Probably.  At this point, we should have the whole file, and we sure
+        # don't mind serving similtaneous requests, right?
+
+        close $lockfile_fh;
+
+        ###
 
         my $fh = $cache->handle( $CK, "<" ) or die "problem finding cache entry\n";
         my $buf;
-        while( read $fh, $buf, 4096 ) {
+        BUF: while( read $fh, $buf, 4096 ) {
+            if( $start > 0 ) {
+                if( $start > length $buf ) {
+                    $start -= length $buf;
+                    next BUF;
+
+                } else {
+                    substr $buf, 0, $start, "";
+                    $start = 0;
+                }
+            }
             print $buf;
         }
         close $fh;
@@ -163,14 +211,35 @@ sub my_copy_hdr {
     my $status = $res->status_line;
     warn "[DEBUG] cache status: $hit; status: $status\n" if $this->{debug};
 
-    my @more_headers = (qw(accept_ranges bytes));
+    my %more_headers = (qw(accept_ranges bytes));
 
     for(qw(content_length), $this->{ignore_last_modified} ? ():(qw(last_modified))) {
         my $v = $res->header($_);
-        push @more_headers, ($_=>$v) if $v;
+
+        if( $v ) {
+            my $k = lc $_;
+               $k =~ s/-/_/g;
+
+            $more_headers{$k} = $v;
+        }
     }
 
-    print $cgi->header(-status=>$status, -charset=>"", -type=>$res->header( 'content-type' ), @more_headers);
+    my $start = 0;
+
+    if( my $r = $cgi->http("Range") ) {
+        if( ($start) = $r =~ m/^bytes=(\d+)-$/ ) {
+            my $len = $more_headers{content_length};
+            my $new = $len - $start;
+            my $end = $len - 1; # this is the byte number, not a number of bytes or something
+
+            $more_headers{content_range}  = "bytes $start-$end/$len";
+            $more_headers{content_length} = $new;
+        }
+    }
+
+    print $cgi->header(-status=>$status, -charset=>"", -type=>$res->header( 'content-type' ), %more_headers);
+
+    return $start;
 }
 
 # }}}
